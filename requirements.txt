@@ -1,0 +1,7 @@
+torch>=2.1
+numpy
+opencv-python
+matplotlib
+scikit-learn
+huggingface_hub
+gdown>=5.1
