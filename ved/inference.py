@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections import deque
 from typing import Dict, Optional
@@ -45,8 +46,12 @@ class Detector:
             x = x.half()
         return torch.sigmoid(self.model(x).float()).cpu().numpy()
 
-    def predict_windows(self, video_path: str, stride_sec: float = 0.5, batch_size: int = 32,
+    def predict_windows(self, video_path: str, stride_sec: float = 0.5, batch_size: int = 8,
                         verbose: bool = True):
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1.")
+        if not math.isfinite(stride_sec) or not 0 < stride_sec <= self.win / self.fps:
+            raise ValueError("stride_sec must be positive and no longer than one model window.")
         stride = max(1, int(round(stride_sec * self.fps)))
         buf = deque(maxlen=self.win)
         pending, pending_starts = [], []
@@ -84,7 +89,12 @@ class Detector:
     def detect(self, video_path: str, stride_sec: float = 0.5, agg: str = "mean",
                thresholds: Optional[Dict[str, float]] = None, low_ratio: float = 0.6,
                smooth_sec: float = 1.0, merge_gap: float = 2.0, min_dur: float = 1.0,
-               batch_size: int = 32, verbose: bool = True):
+               batch_size: int = 8, verbose: bool = True):
+        if thresholds:
+            if set(thresholds) - set(self.class_names):
+                raise ValueError("Threshold keys must use event_1, event_2, etc.")
+            if any(not math.isfinite(v) or not 0 <= v <= 1 for v in thresholds.values()):
+                raise ValueError("Thresholds must be finite numbers between 0 and 1.")
         starts, probs, n = self.predict_windows(video_path, stride_sec, batch_size, verbose)
         frame_scores = windows_to_frame_scores(starts, probs, n, self.win, agg)
         thr = dict(self.thresholds)

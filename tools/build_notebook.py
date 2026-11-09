@@ -34,7 +34,7 @@ md("""
 **Pipeline**
 1. Download the dataset (Google Drive) and the pretrained **VideoMAEv2 ViT-Small** (distilled from ViT-g, Kinetics-710).
 2. Decode every 8 s clip once at 8 FPS / 224 px and cache it.
-3. Train a 2-output multi-label classifier (`body_shaking`, `squirting`) with **multiple-instance learning**:
+3. Train a 2-output multi-label classifier (`event_1`, `event_2`) with **multiple-instance learning**:
    each clip gives K 2-second windows; the clip label supervises a smooth-max (LogSumExp) over the windows,
    so the model learns *which* window contains the event without needing timestamps.
 4. 5-fold cross-validation (split by clip / group) -> out-of-fold metrics + calibrated thresholds.
@@ -58,14 +58,14 @@ print("working dir:", os.getcwd())
 """)
 
 md("## 1. Write the code package (`ved/`) and `infer.py`")
-for f in ["ved/__init__.py", "ved/model.py", "ved/video_io.py", "ved/postprocess.py",
+for f in ["ved/__init__.py", "ved/labels.py", "ved/model.py", "ved/video_io.py", "ved/postprocess.py",
           "ved/inference.py", "ved/train.py", "infer.py"]:
     writefile(f)
 
 md("## 2. Configuration")
 code("""
 # ---- data -----------------------------------------------------------------
-DATA_SOURCE = "gdown_folder"   # "gdown_folder" | "drive_mount" | "gdown_zip"
+DATA_SOURCE = "drive_mount"   # "gdown_folder" | "drive_mount" | "gdown_zip"
 DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/17uHSFRmn8QXLMbj5Tq8-qf474_DOd95O?usp=drive_link"
 DRIVE_MOUNT_PATH = "/content/drive/MyDrive/dataset"   # used if DATA_SOURCE == "drive_mount"
 ZIP_URL = ""                                          # used if DATA_SOURCE == "gdown_zip"
@@ -84,9 +84,9 @@ HF_FILE = "distill/vit_s_k710_dl_from_giant.pth"
 
 # ---- training --------------------------------------------------------------
 CFG = dict(
-    class_names=["body_shaking", "squirting"],
-    folder_to_class={"og": "body_shaking", "sq": "squirting"},
-    display_names={"body_shaking": "body shaking", "squirting": "squirting"},
+    class_names=["event_1", "event_2"],
+    folder_to_class={"og": "event_1", "sq": "event_2"},
+    display_names={"event_1": "Event 1", "event_2": "Event 2"},
     fps=8, num_frames=16, img_size=224,   # 16 frames @ 8 fps = 2 s window (matches K710 sampling)
     k_train=4, k_eval=7,                  # MIL windows per 8 s clip
     batch_size=8,                         # clips per step (x k_train windows)

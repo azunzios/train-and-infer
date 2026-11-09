@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.cache/
+.pytest_cache/
+work/
+outputs/
+results/
+models/
+*.pt
+*.pth
+*.mp4
+*.mkv
+*.webm
+*.cookies.txt
+.env

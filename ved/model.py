@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .labels import neutral_metadata
+
 
 # --------------------------------------------------------------------------- #
 # Building blocks
@@ -207,11 +209,12 @@ def save_export(model: EventClassifier, path: str, meta: dict):
     cfg = dict(model.backbone_cfg)
     cfg["drop_path_rate"] = 0.0
     torch.save({"state_dict": sd, "backbone_cfg": cfg,
-                "num_classes": model.head.out_features, "meta": meta}, path)
+                "num_classes": model.head.out_features,
+                "meta": neutral_metadata(meta, model.head.out_features)}, path)
 
 
 def load_export(path: str, device="cpu"):
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
     model = EventClassifier(ckpt["backbone_cfg"], ckpt["num_classes"], head_dropout=0.0)
     model.load_state_dict({k: v.float() for k, v in ckpt["state_dict"].items()})
-    return model.to(device).eval(), ckpt["meta"]
+    return model.to(device).eval(), neutral_metadata(ckpt["meta"], ckpt["num_classes"])
