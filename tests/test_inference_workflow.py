@@ -61,6 +61,8 @@ class NotebookTests(unittest.TestCase):
     def test_inference_notebook_has_valid_python_and_form_fields(self):
         root = Path(__file__).resolve().parents[1]
         notebook = json.loads((root / "notebooks/infer_colab.ipynb").read_text(encoding="utf-8"))
+        self.assertEqual(len(notebook["cells"]), 1)
+        self.assertEqual(notebook["cells"][0]["cell_type"], "code")
         all_code = ""
         for index, cell in enumerate(notebook["cells"]):
             if cell["cell_type"] == "code":
@@ -68,9 +70,12 @@ class NotebookTests(unittest.TestCase):
                 compile(source, f"infer_colab:{index}", "exec")
                 self.assertEqual(cell["outputs"], [])
                 all_code += source
-        for name in ("video_url", "start_time", "end_time", "output_dir", "batch_size"):
+        for name in ("video_url", "output_dir", "batch_size", "local_checkpoint"):
             self.assertRegex(all_code, rf'{name} = .*# @param')
         self.assertNotIn("train_model", all_code)
+        for obsolete in ("yt_dlp", "ffmpeg", "deno", "from infer_url", "start_time =", "end_time ="):
+            self.assertNotIn(obsolete, all_code)
+        self.assertIn('["wget", "-O",', all_code)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")

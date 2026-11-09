@@ -1,4 +1,4 @@
-"""Generate the inference-only Colab notebook with editable form fields."""
+"""Build a self-contained, single-cell Colab notebook for local files or wget."""
 from __future__ import annotations
 
 import json
@@ -7,75 +7,19 @@ import textwrap
 
 
 def build_notebook():
-    cells = []
-
-    def cell(kind, source, form=False):
-        item = {
-            "cell_type": kind,
-            "metadata": {"cellView": "form"} if form else {},
-            "source": textwrap.dedent(source).strip().splitlines(keepends=True),
-        }
-        if kind == "code":
-            item.update(execution_count=None, outputs=[])
-        cells.append(item)
-
-    cell("markdown", """
-        # Inferensi video — tanpa training
-
-        Model: [`azunzios/learning`](https://huggingface.co/azunzios/learning).
-        Label hasil menggunakan `event_1`, `event_2`, dan seterusnya sesuai urutan output model.
-
-        1. Pilih **Runtime → Change runtime type → GPU** (misalnya T4).
-        2. Jalankan setup, isi formulir, lalu jalankan inferensi dan sel hasil.
-        3. Video diunduh dengan **yt-dlp**, dipotong sesuai waktu sumber dengan **FFmpeg**,
-           lalu dianalisis memakai checkpoint yang sudah dilatih.
-
-        `start_time` dan `end_time` adalah waktu absolut pada video sumber, bukan durasi.
-        Contoh: `00:01:00` sampai `00:01:30` menghasilkan klip 30 detik.
-        Kosongkan `end_time` untuk memproses sampai akhir. Untuk pemeriksaan pertama,
-        gunakan klip pendek. Sumber tertentu mungkin tetap memerlukan unduhan lebih panjang.
-    """)
-    cell("code", '''
-        # @title 1. Setup lingkungan (jalankan sekali)
-        import os
-        from pathlib import Path
-        import shutil
-        import subprocess
-        import sys
-
-        REPO = Path("/content/train-and-infer")
-        if not (REPO / ".git").is_dir():
-            subprocess.run(["git", "clone", "--depth", "1",
-                            "https://github.com/azunzios/train-and-infer.git", str(REPO)], check=True)
-        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-            subprocess.run(["apt-get", "update", "-qq"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], check=True)
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                        "-r", str(REPO / "requirements-inference.txt")], check=True)
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade",
-                        "yt-dlp[default]"], check=True)
-        # Runtime JavaScript diperlukan untuk dukungan YouTube melalui yt-dlp.
-        os.environ["PATH"] = str(Path.home() / ".deno" / "bin") + os.pathsep + os.environ["PATH"]
-        if not shutil.which("deno"):
-            subprocess.run(["bash", "-o", "pipefail", "-c",
-                            "curl -fsSL https://deno.land/install.sh | sh -s -- --yes"], check=True)
-        if str(REPO) not in sys.path:
-            sys.path.insert(0, str(REPO))
-        import torch
-        print("PyTorch:", torch.__version__)
-        print("CUDA tersedia:", torch.cuda.is_available())
-        if torch.cuda.is_available():
-            print("GPU:", torch.cuda.get_device_name(0))
-        print("Setup selesai. Isi formulir pada sel berikutnya.")
-    ''')
-    cell("code", '''
-        # @title 2. Formulir inferensi
-        # @markdown **Video dan waktu sumber** — detik, MM:SS, atau HH:MM:SS.
-        video_url = "" # @param {type:"string"}
-        start_time = "00:00:00" # @param {type:"string"}
-        end_time = "00:00:30" # @param {type:"string"}
+    root = Path(__file__).resolve().parents[1]
+    package_sources = {
+        name: (root / name).read_text(encoding="utf-8")
+        for name in ("ved/__init__.py", "ved/labels.py", "ved/model.py",
+                     "ved/video_io.py", "ved/postprocess.py", "ved/inference.py")
+    }
+    source = textwrap.dedent('''
+        # @title Inferensi video — satu sel
+        # @markdown Pilih **Runtime → Change runtime type → GPU**, isi formulir, lalu jalankan sel ini.
+        # @markdown Upload video ke panel Files, atau masukkan URL langsung ke berkas video untuk diunduh dengan **wget**.
+        video_url = "/content/test.mp4" # @param {type:"string"}
         output_dir = "/content/outputs/check" # @param {type:"string"}
-        max_height = 720 # @param [360, 480, 720, 1080] {type:"raw"}
+        # @markdown Seluruh video diproses. Folder output yang sama akan mengganti hasil sebelumnya.
         # @markdown **Model** — kosongkan checkpoint lokal untuk unduh otomatis dari Hub.
         model_repo = "azunzios/learning" # @param {type:"string"}
         model_file = "model.pt" # @param {type:"string"}
@@ -85,93 +29,165 @@ def build_notebook():
         stride_sec = 0.5 # @param {type:"number"}
         use_fp16 = True # @param {type:"boolean"}
         require_gpu = True # @param {type:"boolean"}
-        # @markdown Nilai **-1** memakai threshold kalibrasi dari model.
+        # @markdown Threshold **-1** memakai kalibrasi bawaan model.
         event_1_threshold = -1.0 # @param {type:"number"}
         event_2_threshold = -1.0 # @param {type:"number"}
         smooth_sec = 1.0 # @param {type:"number"}
         merge_gap_sec = 2.0 # @param {type:"number"}
         min_duration_sec = 1.0 # @param {type:"number"}
         low_ratio = 0.6 # @param {type:"number"}
-        # @markdown Opsional: path cookies Netscape yang sudah diunggah ke runtime.
-        cookies_file = "" # @param {type:"string"}
-        # @markdown Preview menyematkan video ke notebook; gunakan untuk klip pendek.
+        # @markdown Preview menyematkan seluruh video; aktifkan hanya untuk video pendek.
         preview_video = False # @param {type:"boolean"}
         download_results = True # @param {type:"boolean"}
-    ''', form=True)
-    cell("code", '''
-        # @title 3. Unduh video dan jalankan inferensi
+
+        import importlib
         import json
         import math
         import os
-        import torch
-        from infer_url import run_pipeline
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        from urllib.parse import urlsplit
+        import zipfile
 
         if not video_url.strip():
-            raise ValueError("Isi video_url pada formulir terlebih dahulu.")
-        if require_gpu and not torch.cuda.is_available():
-            raise RuntimeError("Aktifkan runtime GPU, lalu jalankan ulang notebook.")
+            raise ValueError("Isi path video lokal atau URL langsung ke file video.")
+        if batch_size < 1 or batch_size != int(batch_size):
+            raise ValueError("Batch harus bilangan bulat minimal 1.")
+        if not math.isfinite(stride_sec) or stride_sec <= 0:
+            raise ValueError("Stride harus berupa angka positif.")
+        if not 0 <= low_ratio <= 1 or any(not math.isfinite(v) or v < 0
+                                         for v in (smooth_sec, merge_gap_sec, min_duration_sec)):
+            raise ValueError("Pengaturan post-processing tidak valid.")
         thresholds = {}
         for index, value in enumerate((event_1_threshold, event_2_threshold), 1):
             if not math.isfinite(value) or (value != -1 and not 0 <= value <= 1):
                 raise ValueError("Threshold harus -1 atau angka antara 0 dan 1.")
             if value != -1:
                 thresholds[f"event_{index}"] = value
-        # Untuk repo privat, tambahkan HF_TOKEN sebagai Colab Secret (ikon kunci).
-        token = os.environ.get("HF_TOKEN")
-        if token is None and not local_checkpoint.strip():
-            try:
-                from google.colab import userdata
-                token = userdata.get("HF_TOKEN")
-            except Exception:
-                token = None
-        paths = run_pipeline(
-            video_url.strip(), output=output_dir, start_time=start_time, end_time=end_time,
-            ckpt=local_checkpoint.strip(), model_repo=model_repo, model_file=model_file,
-            batch_size=batch_size, stride=stride_sec, thresholds=thresholds,
-            smooth=smooth_sec, merge_gap=merge_gap_sec, min_duration=min_duration_sec,
-            low_ratio=low_ratio, max_height=max_height, fp16=use_fp16,
-            device="cuda" if require_gpu else None, cookies_file=cookies_file.strip(), token=token,
-        )
-        result = json.loads(paths["json"].read_text(encoding="utf-8"))
-        print(json.dumps(result, indent=2))
-        print("Hasil tersimpan:", paths["archive"])
-    ''')
-    cell("code", '''
-        # @title 4. Lihat hasil dan unduh ZIP
-        from IPython.display import Image, Video, display
-        from google.colab import files
 
-        if "paths" not in globals():
-            raise RuntimeError("Jalankan sel inferensi sampai selesai terlebih dahulu.")
+        # Dependency dipasang otomatis; PyTorch bawaan Colab tetap digunakan jika sudah memenuhi versi.
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "-q", "torch>=2.1", "numpy",
+            "opencv-python-headless", "matplotlib", "huggingface_hub",
+        ], check=True)
+        import torch
+        if require_gpu and not torch.cuda.is_available():
+            raise RuntimeError("Aktifkan runtime GPU, lalu jalankan ulang sel ini.")
+
+        # Paket inferensi disertakan di notebook sehingga tidak perlu clone repo.
+        package_sources = __PACKAGE_SOURCES__
+        runtime_dir = (Path("/content") if Path("/content").is_dir() else Path.cwd() / ".cache") / "video_event_runtime"
+        for relative, body in package_sources.items():
+            target = runtime_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body, encoding="utf-8")
+        for module_name in list(sys.modules):
+            if module_name == "ved" or module_name.startswith("ved."):
+                del sys.modules[module_name]
+        if str(runtime_dir) in sys.path:
+            sys.path.remove(str(runtime_dir))
+        sys.path.insert(0, str(runtime_dir))
+        importlib.invalidate_caches()
+        from huggingface_hub import hf_hub_download
+        from ved.inference import Detector, save_result, plot_timeline
+
+        checkpoint = local_checkpoint.strip()
+        if checkpoint:
+            if not Path(checkpoint).expanduser().is_file():
+                raise FileNotFoundError("Checkpoint lokal tidak ditemukan.")
+            checkpoint = str(Path(checkpoint).expanduser().resolve())
+        else:
+            token = os.environ.get("HF_TOKEN")
+            if token is None:
+                try:
+                    from google.colab import userdata
+                    token = userdata.get("HF_TOKEN")
+                except Exception:
+                    token = None
+            checkpoint = hf_hub_download(model_repo, model_file, token=token)
+        detector = Detector(checkpoint, device="cuda" if require_gpu else None, fp16=use_fp16)
+        if stride_sec > detector.win / detector.fps:
+            raise ValueError("Stride tidak boleh lebih panjang dari jendela model.")
+        if set(thresholds) - set(detector.class_names):
+            raise ValueError("Threshold mengacu pada kelas yang tidak tersedia di model.")
+        print("Device:", detector.device, "| Kelas:", ", ".join(detector.class_names))
+        if detector.device.startswith("cuda"):
+            print("GPU:", torch.cuda.get_device_name(0))
+
+        out = Path(output_dir).expanduser().resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        source = video_url.strip()
+        if urlsplit(source).scheme.lower() in {"http", "https"}:
+            if not shutil.which("wget"):
+                if not Path("/content").is_dir():
+                    raise RuntimeError("Pasang wget dan tambahkan ke PATH terlebih dahulu.")
+                subprocess.run(["apt-get", "update", "-qq"], check=True)
+                subprocess.run(["apt-get", "install", "-y", "-qq", "wget"], check=True)
+            suffix = Path(urlsplit(source).path).suffix.lower()
+            if suffix not in {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}:
+                suffix = ".mp4"
+            video_path = out / ("input_video" + suffix)
+            with tempfile.TemporaryDirectory(prefix=".download-", dir=out) as temp:
+                temporary = Path(temp) / ("video" + suffix)
+                print("Mengunduh video dengan wget...", flush=True)
+                subprocess.run(["wget", "-O", str(temporary), "--", source], check=True)
+                if not temporary.is_file() or temporary.stat().st_size == 0:
+                    raise RuntimeError("Unduhan tidak menghasilkan video.")
+                os.replace(temporary, video_path)
+        else:
+            video_path = Path(source).expanduser().resolve()
+        if not video_path.is_file() or video_path.stat().st_size == 0:
+            raise FileNotFoundError("Video belum ditemukan atau kosong. Upload file ke panel Files.")
+
+        result = detector.detect(
+            str(video_path), batch_size=int(batch_size), stride_sec=stride_sec,
+            thresholds=thresholds, smooth_sec=smooth_sec, merge_gap=merge_gap_sec,
+            min_dur=min_duration_sec, low_ratio=low_ratio,
+        )
+        print(detector.report(result))
+        paths = {"video": video_path, "json": out / "result.json",
+                 "timeline": out / "timeline.png", "archive": out / "inference_results.zip"}
+        save_result(result, str(paths["json"]), detector.display)
+        figure = plot_timeline(result, detector.class_names, str(paths["timeline"]), detector.display)
+        import matplotlib.pyplot as plt
+        plt.close(figure)
+        with zipfile.ZipFile(paths["archive"], "w", compression=zipfile.ZIP_STORED) as archive:
+            archive.write(video_path, arcname="video" + video_path.suffix)
+            archive.write(paths["json"], arcname="result.json")
+            archive.write(paths["timeline"], arcname="timeline.png")
+        print(json.dumps(json.loads(paths["json"].read_text(encoding="utf-8")), indent=2))
+        print("Hasil tersimpan:", out)
+
+        from IPython.display import Image, Video, display
         display(Image(filename=str(paths["timeline"])))
         if preview_video:
-            display(Video(str(paths["video"]), embed=True))
-        print("ZIP berisi clip.mp4, result.json, dan timeline.png.")
-        print("Waktu start/end di JSON relatif terhadap klip; source_start/source_end relatif ke sumber.")
+            display(Video(str(video_path), embed=True))
         if download_results:
-            files.download(str(paths["archive"]))
-    ''')
-    cell("markdown", """
-        **Catatan:** hasil deteksi mengikuti bobot dan threshold model; gunakan video berlabel
-        untuk mengukur akurasi. Runtime Colab dapat terputus dan file `/content` bersifat sementara.
-        Simpan ZIP sebelum sesi berakhir. Menjalankan ulang dengan `output_dir` yang sama akan
-        mengganti hasil sebelumnya. Jika sumber meminta login, unggah cookies Netscape lewat
-        panel Files dan isi `cookies_file`; jangan commit cookies ke GitHub.
-    """)
+            try:
+                from google.colab import files
+            except ImportError:
+                print("ZIP siap:", paths["archive"])
+            else:
+                files.download(str(paths["archive"]))
+    ''').strip().replace("__PACKAGE_SOURCES__", repr(package_sources))
     notebook = {
-        "cells": cells,
+        "cells": [{"cell_type": "code", "metadata": {"cellView": "form"},
+                   "source": source.splitlines(keepends=True),
+                   "execution_count": None, "outputs": []}],
         "metadata": {
             "accelerator": "GPU", "colab": {"provenance": [], "name": "infer_colab.ipynb"},
             "kernelspec": {"display_name": "Python 3", "name": "python3"},
             "language_info": {"name": "python"},
         },
-        "nbformat": 4,
-        "nbformat_minor": 0,
+        "nbformat": 4, "nbformat_minor": 0,
     }
-    target = Path(__file__).resolve().parents[1] / "notebooks" / "infer_colab.ipynb"
+    target = root / "notebooks" / "infer_colab.ipynb"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(notebook, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Wrote {target.name} ({len(cells)} cells)")
+    print(f"Wrote {target.name} (1 cell)")
 
 
 if __name__ == "__main__":

@@ -10,23 +10,29 @@ tidak disalin ke hasil inferensi.
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/azunzios/train-and-infer/blob/main/notebooks/infer_colab.ipynb)
 
 1. Buka notebook di atas dan pilih **Runtime → Change runtime type → GPU**.
-2. Jalankan sel setup, lalu isi formulir `@param`: URL video, `start_time`,
-   `end_time`, `output_dir`, batch, dan threshold opsional.
-3. Jalankan sel inferensi. Notebook mengunduh `model.pt` dari
-   [`azunzios/learning`](https://huggingface.co/azunzios/learning), mengunduh interval
-   video dengan yt-dlp, menyiapkan MP4 melalui FFmpeg, dan menjalankan model.
-4. Jalankan sel hasil untuk melihat grafik dan mengunduh ZIP.
+2. Upload video ke panel Files, lalu isi `video_url` dengan path seperti
+   `/content/test.mp4`. Alternatifnya, masukkan URL langsung ke berkas video.
+3. Atur `output_dir`, batch, dan threshold opsional pada formulir `@param`, lalu
+   jalankan **satu-satunya sel**. Setup, inferensi, grafik, dan unduh ZIP berjalan
+   dalam sel yang sama.
 
-Tidak perlu dataset, checkpoint backbone tambahan, atau training ulang. Contoh
-`start_time=00:01:00`, `end_time=00:01:30` berarti mengambil detik 60–90 dari sumber.
-Waktu bisa berupa detik, `MM:SS`, atau `HH:MM:SS` (termasuk pecahan detik).
-Kosongkan waktu akhir untuk mengambil sampai akhir video. Endpoint waktu akhir
-adalah posisi absolut pada sumber, bukan durasi klip.
+Notebook menyertakan kode inferensi sehingga dapat diunggah langsung ke Colab
+tanpa clone repo. Checkpoint diunduh otomatis dari
+[`azunzios/learning`](https://huggingface.co/azunzios/learning), atau gunakan
+`local_checkpoint` untuk model yang sudah diunggah. Tidak perlu dataset,
+checkpoint backbone tambahan, atau training ulang.
+
+Path lokal langsung diproses. Untuk URL, notebook menggunakan **wget** dan
+memerlukan link langsung ke video, bukan halaman pemutar video. Seluruh video
+diproses; formulir tidak menyediakan pemotongan waktu atau perubahan resolusi.
+Alur Colab ini tidak memasang atau menjalankan yt-dlp, FFmpeg CLI, atau Deno.
+Preview bersifat opsional dan mengikuti format/codec file asli; gunakan MP4 yang
+kompatibel dengan browser jika ingin menampilkan video di notebook.
 
 Untuk repo model privat, simpan token baca sebagai Colab Secret bernama `HF_TOKEN`
-dan izinkan akses notebook. Sumber video tertentu memerlukan cookies Netscape:
-unggah berkasnya ke panel Files lalu isi `cookies_file`. Jangan memasukkan token
-atau cookies ke sel kode yang akan dibagikan.
+dan izinkan akses notebook. Jangan memasukkan token ke sel kode yang akan dibagikan.
+ZIP berisi video asli, `result.json`, dan `timeline.png`. Simpan ZIP sebelum runtime
+berakhir karena berkas `/content` bersifat sementara.
 
 ## Instalasi lokal untuk RTX 4070
 
@@ -40,9 +46,9 @@ yang dipilih, dan environment Python terpisah. Contoh berikut memakai wheel CUDA
 | PyTorch (`torch`) | Wajib; pasang build CUDA agar GPU digunakan. |
 | Driver NVIDIA | Wajib untuk inferensi GPU. |
 | CUDA Toolkit / cuDNN terpisah | Tidak diperlukan untuk menjalankan wheel PyTorch siap pakai; runtime disediakan paket. |
-| FFmpeg dan ffprobe | Wajib untuk alur unduh/potong/konversi URL. |
+| FFmpeg dan ffprobe | Dipakai CLI `infer_url.py` untuk unduh/potong/konversi; Colab satu sel menggunakan wget. |
 | NumPy, OpenCV, Matplotlib, huggingface_hub | Dipasang lewat `requirements-inference.txt`. |
-| yt-dlp + runtime JavaScript | Alur URL menggunakan yt-dlp; Deno diperlukan untuk dukungan YouTube yang lengkap. |
+| yt-dlp + runtime JavaScript | Dipakai CLI `infer_url.py`; tidak diperlukan oleh notebook inferensi satu sel. |
 | torchvision, torchaudio, TensorFlow | Tidak dipakai oleh kode inferensi ini. |
 
 ### Windows PowerShell
