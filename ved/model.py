@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .labels import neutral_metadata
+from .labels import inference_metadata
 
 
 # --------------------------------------------------------------------------- #
@@ -210,14 +210,14 @@ def save_export(model: EventClassifier, path: str, meta: dict):
     cfg["drop_path_rate"] = 0.0
     torch.save({"state_dict": sd, "backbone_cfg": cfg,
                 "num_classes": model.head.out_features,
-                "meta": neutral_metadata(meta, model.head.out_features)}, path)
+                "meta": inference_metadata(meta, model.head.out_features)}, path)
 
 
 def load_export(path: str, device="cpu"):
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     model = EventClassifier(ckpt["backbone_cfg"], ckpt["num_classes"], head_dropout=0.0)
     model.load_state_dict({k: v.float() for k, v in ckpt["state_dict"].items()})
-    meta = neutral_metadata(ckpt["meta"], ckpt["num_classes"])
-    model.output_labels = dict(zip(meta["class_names"], ckpt["meta"]["class_names"]))
+    meta = inference_metadata(ckpt["meta"], ckpt["num_classes"])
+    model.output_labels = dict(zip(meta["class_names"], meta["class_names"]))
     model.output_display = dict(ckpt["meta"].get("display_names", {}))
     return model.to(device).eval(), meta

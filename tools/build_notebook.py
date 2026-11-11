@@ -34,7 +34,7 @@ md("""
 **Pipeline**
 1. Download the dataset (Google Drive) and the pretrained **VideoMAEv2 ViT-Small** (distilled from ViT-g, Kinetics-710).
 2. Decode every 8 s clip once at 8 FPS / 224 px and cache it.
-3. Train a 2-output multi-label classifier (`event_1`, `event_2`) with **multiple-instance learning**:
+3. Train a 2-output multi-label classifier with **multiple-instance learning**:
    each clip gives K 2-second windows; the clip label supervises a smooth-max (LogSumExp) over the windows,
    so the model learns *which* window contains the event without needing timestamps.
 4. 5-fold cross-validation (split by clip / group) -> out-of-fold metrics + calibrated thresholds.
@@ -59,7 +59,8 @@ print("working dir:", os.getcwd())
 
 md("## 1. Write the code package (`ved/`) and `infer.py`")
 for f in ["ved/__init__.py", "ved/labels.py", "ved/model.py", "ved/video_io.py", "ved/postprocess.py",
-          "ved/inference.py", "ved/train.py", "infer.py"]:
+          "ved/inference.py", "ved/media.py", "ved/cli.py", "ved/outputs.py",
+          "ved/train.py", "infer.py", "infer_url.py"]:
     writefile(f)
 
 md("## 2. Configuration")
@@ -84,9 +85,9 @@ HF_FILE = "distill/vit_s_k710_dl_from_giant.pth"
 
 # ---- training --------------------------------------------------------------
 CFG = dict(
-    class_names=["event_1", "event_2"],
-    folder_to_class={"og": "event_1", "sq": "event_2"},
-    display_names={"event_1": "Event 1", "event_2": "Event 2"},
+    class_names=["body_shaking", "squirting"],
+    folder_to_class={"og": "body_shaking", "sq": "squirting"},
+    display_names={"body_shaking": "body shaking", "squirting": "squirting"},
     fps=8, num_frames=16, img_size=224,   # 16 frames @ 8 fps = 2 s window (matches K710 sampling)
     k_train=4, k_eval=7,                  # MIL windows per 8 s clip
     batch_size=8,                         # clips per step (x k_train windows)
@@ -98,6 +99,7 @@ CFG = dict(
 )
 N_FOLDS = 5
 RUN_CV = True          # set False to skip CV and only train the final model
+CREATE_EXPORT_ARCHIVE = False  # optional source/model bundle; inference never creates a ZIP
 SEED = 42
 """)
 
@@ -297,26 +299,30 @@ save_result(res, os.path.join(OUT_DIR, "demo_result.json"), det.display)
 plot_timeline(res, det.class_names, os.path.join(OUT_DIR, "demo_timeline.png"), det.display); plt.show()
 """)
 
-md("## 9. Package the export for the RTX 4070 machine")
+md("## 9. Optional export archive (disabled by default; set CREATE_EXPORT_ARCHIVE=True to enable)")
 code("""
-import shutil
-pkg = os.path.join(WORK, "inference_package")
-shutil.rmtree(pkg, ignore_errors=True)
-os.makedirs(pkg)
-shutil.copytree("ved", os.path.join(pkg, "ved"))
-shutil.copy("infer.py", pkg)
-for f in os.listdir(OUT_DIR):
-    shutil.copy(os.path.join(OUT_DIR, f), pkg)
-zip_path = shutil.make_archive(os.path.join(WORK, "inference_package"), "zip", pkg)
-print("created", zip_path)
-if IN_COLAB:
-    from google.colab import drive, files
-    try:
-        drive.mount("/content/drive")
-        shutil.copy(zip_path, "/content/drive/MyDrive/")
-        print("copied to MyDrive/inference_package.zip")
-    except Exception as e:
-        print("Drive copy failed:", e); files.download(zip_path)
+if not CREATE_EXPORT_ARCHIVE:
+    print("Archive disabled. Model and inference results:", OUT_DIR)
+else:
+    import shutil
+    pkg = os.path.join(WORK, "inference_package")
+    shutil.rmtree(pkg, ignore_errors=True)
+    os.makedirs(pkg)
+    shutil.copytree("ved", os.path.join(pkg, "ved"))
+    shutil.copy("infer.py", pkg)
+    shutil.copy("infer_url.py", pkg)
+    for f in os.listdir(OUT_DIR):
+        shutil.copy(os.path.join(OUT_DIR, f), pkg)
+    zip_path = shutil.make_archive(os.path.join(WORK, "inference_package"), "zip", pkg)
+    print("created", zip_path)
+    if IN_COLAB:
+        from google.colab import drive, files
+        try:
+            drive.mount("/content/drive")
+            shutil.copy(zip_path, "/content/drive/MyDrive/")
+            print("copied to MyDrive/inference_package.zip")
+        except Exception as e:
+            print("Drive copy failed:", e); files.download(zip_path)
 """)
 
 nb = {"cells": cells, "metadata": {

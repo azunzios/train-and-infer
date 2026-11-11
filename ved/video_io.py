@@ -23,12 +23,16 @@ def video_info(path: str) -> Tuple[float, int, float]:
     return fps, n, (n / fps if n > 0 else 0.0)
 
 
-def iter_frames(path: str, target_fps: float, size: int) -> Iterator[np.ndarray]:
+def iter_frames(path: str, target_fps: float, size: int,
+                start_sec: float = 0, end_sec: float | None = None) -> Iterator[np.ndarray]:
     """Yield RGB uint8 frames (size x size x 3) sampled at `target_fps`.
 
     Frame k corresponds to timestamp k / target_fps seconds.
     Frames are squashed (not cropped) to keep the whole scene visible.
     """
+    if not math.isfinite(start_sec) or start_sec < 0 or (end_sec is not None and
+            (not math.isfinite(end_sec) or end_sec <= start_sec)):
+        raise ValueError("Invalid decoding interval.")
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise IOError(f"Cannot open video: {path}")
@@ -36,26 +40,32 @@ def iter_frames(path: str, target_fps: float, size: int) -> Iterator[np.ndarray]
     if src_fps <= 1e-3 or src_fps > 240:
         src_fps = 30.0
     step = 1.0 / target_fps
-    next_t = 0.0
-    idx = 0
-    while True:
-        ok = cap.grab()
-        if not ok:
-            break
-        t = idx / src_fps
-        idx += 1
-        if t + 1e-6 < next_t:
-            continue
-        ok, frame = cap.retrieve()
-        if not ok:
-            break
-        frame = cv2.resize(frame, (size, size), interpolation=cv2.INTER_AREA)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # emit the same frame several times if the source FPS < target FPS
-        while next_t <= t + 1e-6:
-            yield frame
-            next_t += step
-    cap.release()
+    next_t = start_sec
+    idx = max(0, int(math.ceil(start_sec * src_fps - 1e-6)))
+    try:
+        if idx and not cap.set(cv2.CAP_PROP_POS_FRAMES, idx):
+            raise IOError("Video backend cannot seek to the requested interval.")
+        while True:
+            t = idx / src_fps
+            if end_sec is not None and next_t >= end_sec - 1e-6:
+                break
+            ok = cap.grab()
+            if not ok:
+                break
+            idx += 1
+            if t + 1e-6 < next_t:
+                continue
+            ok, frame = cap.retrieve()
+            if not ok:
+                break
+            frame = cv2.resize(frame, (size, size), interpolation=cv2.INTER_AREA)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # Repeat frames if the source FPS is below the model FPS.
+            while next_t <= t + 1e-6 and (end_sec is None or next_t < end_sec - 1e-6):
+                yield frame
+                next_t += step
+    finally:
+        cap.release()
 
 
 def read_frames(path: str, target_fps: float, size: int) -> np.ndarray:

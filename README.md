@@ -1,8 +1,10 @@
 # Video Event Detection
 
-Training dan inferensi video menggunakan VideoMAEv2. Proses dan grafik menggunakan
-nama netral `event_1`, `event_2`, dan seterusnya. Hasil JSON memakai kembali nama
-asli checkpoint. Urutan output dan threshold kalibrasi tetap dipertahankan.
+Training dan inferensi video menggunakan VideoMAEv2. Log, grafik, dan JSON memakai
+nama asli checkpoint, termasuk `body_shaking` dan `squirting` pada model lama.
+Urutan output dan threshold kalibrasi tetap dipertahankan. `event_1`, `event_2`,
+dan seterusnya tetap diterima sebagai alias threshold berdasarkan urutan output.
+CLI dan notebook inferensi tidak membuat archive/ZIP.
 
 ## Colab: langsung inferensi
 
@@ -23,7 +25,9 @@ checkpoint backbone tambahan, atau training ulang.
 
 Path lokal langsung diproses. Untuk URL, notebook menggunakan **wget** dan
 memerlukan link langsung ke video, bukan halaman pemutar video. Seluruh video
-diproses; formulir tidak menyediakan pemotongan waktu atau perubahan resolusi.
+diproses secara default. Isi `analyze_from_sec` dan `analyze_until_sec` untuk
+melewati awal/akhir video; batas akhir `-1` berarti sampai akhir. Timestamp hasil
+mengikuti posisi pada video input. Formulir tidak mengubah resolusi video sumber.
 Alur Colab ini tidak memasang atau menjalankan yt-dlp, FFmpeg CLI, atau Deno.
 Preview bersifat opsional dan mengikuti format/codec file asli; gunakan MP4 yang
 kompatibel dengan browser jika ingin menampilkan video di notebook.
@@ -31,7 +35,7 @@ kompatibel dengan browser jika ingin menampilkan video di notebook.
 Untuk repo model privat, simpan token baca sebagai Colab Secret bernama `HF_TOKEN`
 dan izinkan akses notebook. Jangan memasukkan token ke sel kode yang akan dibagikan.
 Notebook tidak membuat ZIP. `result.json` mengembalikan label dan threshold ke
-nama asli checkpoint; tampilan proses dan grafik tetap menggunakan nama netral.
+nama asli checkpoint; tampilan proses dan grafik juga memakai nama asli.
 Hanya satu segmen dengan confidence `peak` tertinggi yang dipotong menjadi
 `best_clip.mp4`; jika peak sama, dipilih skor mean tertinggi. Klip dibuat melalui
 OpenCV dan tidak menyertakan audio. Jika tidak ada deteksi, klip tidak dibuat.
@@ -41,6 +45,18 @@ Catatan konfigurasi memuat hash checkpoint, threshold efektif, pengaturan video,
 dan versi library untuk membandingkan dua run. Threshold formulir `-1` memakai
 kalibrasi model; nilai `0` meloloskan semua skor. Simpan hasil sebelum runtime
 berakhir karena berkas `/content` bersifat sementara.
+
+Notebook menyertakan salinan kode inferensi di dalam sel. **`git pull` tidak
+memperbarui notebook yang sudah terbuka di Colab atau file notebook lain yang
+pernah disalin.** Buka ulang `notebooks/infer_colab.ipynb` versi terbaru dan
+jalankan selnya. Log baru memuat `Workflow: original labels, no archive,
+prefetch + adaptive scan`. Arsip model/source pada sel terakhir notebook
+**training** juga dinonaktifkan secara default; hanya dibuat jika konfigurasi
+`CREATE_EXPORT_ARCHIVE=True` dipilih.
+
+Untuk mempercepat Colab, aktifkan `prefetch` (default), coba `stride_sec=1.0`,
+dan naikkan batch ke 16 jika VRAM cukup. `scan_mode="adaptive"` tersedia untuk
+memeriksa kandidat lebih rapat; lihat batasannya pada bagian kecepatan di bawah.
 
 ## Instalasi lokal untuk RTX 4070
 
@@ -135,7 +151,14 @@ Folder `--output` berisi:
 | `clip.mp4` | Video interval terpilih, H.264/AAC untuk kompatibilitas preview. |
 | `result.json` | Segmen per kelas, threshold, skor peak/mean, dan offset sumber. |
 | `timeline.png` | Grafik skor per kelas dan segmen terdeteksi. |
-| `inference_results.zip` | Ketiga berkas di atas untuk diunduh. |
+| `best_clip.mp4` | Satu segmen dengan peak tertinggi (tie: mean); dibuat jika ada deteksi. Tanpa audio. |
+| `run_config.json` | Hash model, nama kelas, threshold efektif, konfigurasi, dan versi library. |
+
+Tidak ada ZIP baru yang dibuat. Arsip lama dari run sebelumnya tidak dihapus.
+Tambahkan `--no-plot` atau `--no-best-clip` jika tidak memerlukan grafik/klip.
+Bagian `performance` di JSON mencatat waktu inferensi, jumlah jendela, rentang
+yang dianalisis, dan faktor realtime. Angka ini tidak mencakup unduhan, pemuatan
+model, grafik, atau penulisan klip.
 
 `start`/`end` pada segmen JSON dihitung dari awal `clip.mp4`.
 `source_start`/`source_end` menambahkan offset `start_time` agar lokasi pada sumber
@@ -150,20 +173,72 @@ folder output sama mengganti hasil sebelumnya.
 .\.venv\Scripts\python.exe infer.py --ckpt models/model.pt --video "video.mp4" --out-dir results --batch 8 --device cuda --plot
 ```
 
-Mode ini tidak mengunduh atau memotong video. `infer.py` menghasilkan JSON dan,
-dengan `--plot`, PNG. FP16 digunakan otomatis di CUDA; tambahkan `--fp32` untuk
+Mode lokal tidak mengunduh video. `infer.py` menghasilkan JSON, PNG, konfigurasi,
+dan satu klip terbaik jika ada deteksi. Nama berkas diawali stem video sumber.
+FP16 digunakan otomatis di CUDA; tambahkan `--fp32` untuk
 menonaktifkannya. Mulai dengan batch **8** pada RTX 4070; jika kehabisan VRAM,
 turunkan menjadi **4**, **2**, atau **1**. Pemakaian memori dan kecepatan bergantung
 pada video dan konfigurasi model. Resolusi input jaringan mengikuti checkpoint,
 sehingga unduhan 4K tidak diperlukan untuk pemeriksaan awal.
 
+`infer.py` juga menerima `--url "URL_VIDEO"` sebagai pengganti `--video`, dengan
+opsi yang sama seperti `infer_url.py`. Jika `--ckpt` dikosongkan, model diambil
+dari `--model-repo` / `--model-file` (default `azunzios/learning`, `model.pt`).
+Untuk checkpoint yang sudah terlanjur menyimpan nama netral, gunakan
+`--class-names body_shaking squirting` **hanya jika urutan head memang sama**.
+Pada Colab, gunakan `class_names_override="body_shaking,squirting"` untuk hal yang sama.
+Nama historis tidak bisa dipulihkan otomatis jika sudah hilang dari metadata.
+
+### Kecepatan dan melewati rentang waktu
+
+```powershell
+# Jalur cepat untuk video lokal; checkpoint model.pt sudah tersedia di folder ini.
+.\.venv\Scripts\python.exe infer.py --video "video.mp4" --ckpt model.pt --profile fast --device cuda --output results
+
+# Lewati tiga menit pertama, berhenti pada menit kesepuluh; timestamp tetap posisi video input.
+.\.venv\Scripts\python.exe infer.py --video "video.mp4" --ckpt model.pt --start-time 00:03:00 --end-time 00:10:00 --profile fast --device cuda
+
+# Scan kasar lalu perinci kandidat dengan stride 0.5 detik.
+.\.venv\Scripts\python.exe infer.py --video "video.mp4" --ckpt model.pt --scan adaptive --batch 16 --device cuda
+```
+
+| Profil | Stride default | Batch default | Dampak |
+| --- | --- | --- | --- |
+| `balanced` | 0.5 s | 8 | Sampling awal, detail waktu lebih rapat. |
+| `fast` | 1.0 s | 16 | Sekitar separuh jumlah jendela untuk video panjang. |
+| `fastest` | 2.0 s | 16 | Sekitar seperempat jumlah jendela; recall/batas waktu dapat turun. |
+
+Stride profil dibatasi panjang jendela model; `--stride` dan `--batch` menimpa
+default profil. FPS, resolusi input, dan jumlah frame model mengikuti checkpoint.
+Prefetch menyiapkan satu batch berikutnya di thread terpisah saat model berjalan;
+gunakan `--no-prefetch` untuk membandingkan atau mengurangi pemakaian RAM.
+Inferensi memakai `torch.inference_mode()` dan statistik normalisasi tersimpan
+pada device. [Dokumentasi PyTorch](https://docs.pytorch.org/docs/stable/generated/torch.autograd.grad_mode.inference_mode.html)
+menjelaskan pengurangan overhead mode inferensi tersebut.
+
+`--scan adaptive` tetap membaca seluruh rentang pada pass awal, tetapi menjalankan
+model dengan stride sepanjang jendelanya. Hanya kandidat dengan salah satu skor
+di atas `threshold_kelas * --gate-ratio` (default 0.5) yang dipindai lagi dengan
+stride pilihan. Konteks tambahan satu jendela + `--refine-padding` detik (default
+2) ditambahkan di kedua sisi. Ini **bukan model pendeteksi percakapan/jenis
+adegan**; bagian tanpa kandidat mendapat lebih sedikit evaluasi model. Kejadian
+singkat dapat terlewat. Menurunkan gate ratio memperluas kandidat. Jika hampir
+semua bagian menjadi kandidat, mode ini dapat lebih lambat karena dua pass;
+threshold 0 juga memicu semua kandidat. Gunakan `full` untuk pemeriksaan utama
+dan bandingkan hasil pada video yang sudah dianotasi sebelum mengandalkan adaptive.
+
+Target 10× realtime belum dijamin: kecepatan bergantung GPU, codec/resolusi sumber,
+batch, stride, dan frekuensi kandidat. Bandingkan `performance.realtime_factor`
+pada video dan rentang sama; 10× berarti 10 menit video dianalisis dalam 1 menit
+inferensi. Decoder atau penulisan klip tetap bisa menjadi bottleneck. Jika log
+menyebut `cpu`, periksa instalasi CUDA pada interpreter yang digunakan.
+
 ## Training dan pemeliharaan notebook
 
 Notebook training tetap tersedia di [`notebooks/train_colab.ipynb`](notebooks/train_colab.ipynb).
 Untuk dependency training lokal gunakan `python -m pip install -r requirements.txt`.
-Folder dataset lama `positive/og` dan `positive/sq` dipetakan ke `event_1` dan
-`event_2` sesuai urutan output. Checkpoint ekspor baru menggunakan metadata netral;
-checkpoint lama dinormalisasi oleh loader saat inferensi.
+Folder dataset lama `positive/og` dan `positive/sq` dipetakan ke `body_shaking` dan
+`squirting` sesuai urutan output. Ekspor dan loader mempertahankan nama kelas.
 
 Setelah mengubah sumber, bangun ulang notebook:
 
@@ -173,7 +248,7 @@ python tools/build_inference_notebook.py
 ```
 
 Pemeriksaan regresi (termasuk video sintetis yang dilayani lewat HTTP lokal,
-unduh/potong FFmpeg, inferensi CPU, dan isi ZIP):
+unduh/potong FFmpeg, inferensi CPU, label, prefetch, adaptive, timestamp, dan output tanpa ZIP):
 
 ```bash
 python -m unittest discover -s tests -v

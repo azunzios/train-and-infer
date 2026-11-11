@@ -9,16 +9,27 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
-import zipfile
 
-from ved.labels import neutral_metadata
+from ved.labels import inference_metadata, neutral_metadata
 from ved.media import parse_time, time_range
 
 
 class MetadataTests(unittest.TestCase):
+    def test_inference_keeps_original_names_and_calibration(self):
+        source = {"class_names": ["second", "first"],
+                  "display_names": {"second": "Second"},
+                  "thresholds": {"second": 0.31, "first": 0.79},
+                  "fps": 8, "num_frames": 16, "img_size": 224, "cfg": {"unused": True}}
+        meta = inference_metadata(source, 2)
+        self.assertEqual(meta["class_names"], source["class_names"])
+        self.assertEqual(meta["thresholds"], source["thresholds"])
+        self.assertEqual(meta["display_names"], {"second": "Second", "first": "first"})
+        self.assertNotIn("cfg", meta)
+
     def test_order_and_thresholds_are_preserved_without_legacy_text(self):
         original = {
             "class_names": ["legacy_second", "legacy_first"],
@@ -80,6 +91,29 @@ class TimeTests(unittest.TestCase):
 
 
 class NotebookTests(unittest.TestCase):
+    def test_training_notebook_cli_package_imports_and_archive_is_opt_in(self):
+        root = Path(__file__).resolve().parents[1]
+        notebook = json.loads((root / "notebooks/train_colab.ipynb").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory)
+            for cell in notebook["cells"]:
+                source = "".join(cell["source"])
+                if source.startswith("%%writefile "):
+                    header, body = source.split("\n", 1)
+                    destination = package / header.split(" ", 1)[1]
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text(body, encoding="utf-8")
+            check = subprocess.run([
+                sys.executable, "-c",
+                "import infer, infer_url; from ved.inference import Detector; "
+                "from pathlib import Path; assert Path(infer.__file__).parent == Path.cwd()",
+            ], cwd=package, capture_output=True, text=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
+            with redirect_stdout(io.StringIO()):
+                exec("".join(notebook["cells"][-1]["source"]),
+                     {"CREATE_EXPORT_ARCHIVE": False, "OUT_DIR": str(package)})
+            self.assertFalse(list(package.glob("*.zip")))
+
     def test_inference_notebook_has_valid_python_and_form_fields(self):
         root = Path(__file__).resolve().parents[1]
         notebook = json.loads((root / "notebooks/infer_colab.ipynb").read_text(encoding="utf-8"))
@@ -105,7 +139,7 @@ class NotebookTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")
 class PipelineTests(unittest.TestCase):
-    def test_download_interval_inference_and_archive(self):
+    def test_download_interval_inference_without_archive(self):
         import torch
 
         from infer_url import run_pipeline
@@ -137,7 +171,7 @@ class PipelineTests(unittest.TestCase):
             sample = torch.rand(1, 3, 2, 16, 16)
             with torch.no_grad():
                 torch.testing.assert_close(loaded(sample), model(sample))
-            self.assertEqual(metadata["thresholds"], {"event_1": 0.31, "event_2": 0.79})
+            self.assertEqual(metadata["thresholds"], {"previous_a": 0.31, "previous_b": 0.79})
 
             class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 def log_message(self, *args):
@@ -174,9 +208,13 @@ class PipelineTests(unittest.TestCase):
             for segment in result["segments"]:
                 self.assertAlmostEqual(segment["source_start"], segment["start"] + 1)
                 self.assertAlmostEqual(segment["source_end"], segment["end"] + 1)
-            self.assertNotIn("previous_", log.getvalue())
-            with zipfile.ZipFile(paths["archive"]) as bundle:
-                self.assertEqual(set(bundle.namelist()), {"clip.mp4", "result.json", "timeline.png"})
+            self.assertIn("previous_", log.getvalue())
+            self.assertNotIn("archive", paths)
+            self.assertFalse(list((root / "results").glob("*.zip")))
+            self.assertEqual(result["best_clip"]["peak"], max(s["peak"] for s in result["segments"]))
+            self.assertEqual(result["best_clip"]["file"], str(paths["clip"]))
+            self.assertGreater(result["performance"]["windows"], 0)
+            self.assertEqual(result["performance"]["device"], "cpu")
 
 
 if __name__ == "__main__":

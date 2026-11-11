@@ -1,51 +1,62 @@
-"""Command-line inference (designed for a consumer GPU such as an RTX 4070).
-
-Example:
-    python infer.py --ckpt export/model.pt --video my_video.mp4 --plot
-"""
+"""Run video event detection from a terminal, on local files or a video URL."""
 import argparse
-import os
+from pathlib import Path
+import subprocess
 
-from ved.inference import Detector, plot_timeline, save_result
+from ved.cli import add_options, checkpoint_path, detection_options, parsed_thresholds
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Detect and localize events in a video.")
-    ap.add_argument("--ckpt", required=True, help="exported model.pt")
-    ap.add_argument("--video", required=True, nargs="+", help="one or more video files")
-    ap.add_argument("--stride", type=float, default=0.5, help="window stride in seconds")
-    ap.add_argument("--agg", choices=["mean", "max"], default="mean",
-                    help="how overlapping windows are combined per frame")
-    ap.add_argument("--smooth", type=float, default=1.0, help="moving-average length (s)")
-    ap.add_argument("--merge-gap", type=float, default=2.0, help="merge segments closer than this (s)")
-    ap.add_argument("--min-dur", type=float, default=1.0, help="drop segments shorter than this (s)")
-    ap.add_argument("--low-ratio", type=float, default=0.6, help="hysteresis low = high * ratio")
-    ap.add_argument("--thr", nargs="*", default=[], help="override thresholds, e.g. event_1=0.6")
-    ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--device", choices=["cuda", "cpu"], default=None,
-                    help="default: CUDA when available, otherwise CPU")
-    ap.add_argument("--fp32", action="store_true", help="disable fp16")
-    ap.add_argument("--out-dir", default="results")
-    ap.add_argument("--plot", action="store_true", help="save a score timeline PNG")
-    args = ap.parse_args()
-
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--video", nargs="+", help="one or more local video files")
+    sources.add_argument("--url", help="one video URL supported by yt-dlp")
+    parser.add_argument("--out-dir", "--output", dest="output", default="results")
+    parser.add_argument("--max-height", type=int, default=720, help="URL download height")
+    parser.add_argument("--cookies-file", default="")
+    add_options(parser)
+    args = parser.parse_args(argv)
     try:
-        thr = {k: float(v) for k, v in (t.split("=", 1) for t in args.thr)}
-    except ValueError:
-        ap.error("--thr must use event_1=0.6 event_2=0.5 format")
-    det = Detector(args.ckpt, device=args.device, fp16=not args.fp32)
-    print(f"device={det.device}  classes={det.class_names}  thresholds={det.thresholds | thr}")
-    os.makedirs(args.out_dir, exist_ok=True)
-    for video in args.video:
-        print(f"\n=== {video}")
-        res = det.detect(video, stride_sec=args.stride, agg=args.agg, thresholds=thr,
-                         low_ratio=args.low_ratio, smooth_sec=args.smooth,
-                         merge_gap=args.merge_gap, min_dur=args.min_dur, batch_size=args.batch)
-        print(det.report(res))
-        stem = os.path.splitext(os.path.basename(video))[0]
-        save_result(res, os.path.join(args.out_dir, stem + ".json"), det.display)
-        if args.plot:
-            plot_timeline(res, det.class_names, os.path.join(args.out_dir, stem + ".png"), det.display)
+        if args.url:
+            from infer_url import run_pipeline
+
+            paths = run_pipeline(
+                args.url, output=args.output, start_time=args.start_time, end_time=args.end_time,
+                ckpt=args.ckpt, model_repo=args.model_repo, model_file=args.model_file,
+                batch_size=args.batch, stride=args.stride, thresholds=parsed_thresholds(args.thr),
+                smooth=args.smooth, merge_gap=args.merge_gap, min_duration=args.min_dur,
+                low_ratio=args.low_ratio, max_height=args.max_height, fp16=not args.fp32,
+                device=args.device, cookies_file=args.cookies_file, profile=args.profile,
+                plot=args.plot, best_clip=args.best_clip, prefetch=args.prefetch,
+                scan=args.scan, gate_ratio=args.gate_ratio, refine_padding=args.refine_padding,
+                class_names=args.class_names, agg=args.agg, verbose=not args.quiet,
+            )
+            for name, path in paths.items():
+                print(f"{name}: {path}")
+            return
+        from ved.inference import Detector
+        from ved.outputs import write_outputs
+
+        videos = [Path(video).expanduser().resolve() for video in args.video]
+        if any(not video.is_file() for video in videos):
+            raise FileNotFoundError("One or more input videos do not exist.")
+        if len({video.stem for video in videos}) != len(videos):
+            raise ValueError("Input videos must have distinct filename stems to avoid overwriting outputs.")
+        checkpoint = checkpoint_path(args.ckpt, args.model_repo, args.model_file)
+        detector = Detector(checkpoint, device=args.device, fp16=not args.fp32, class_names=args.class_names)
+        options = detection_options(args, detector)
+        print(f"Device: {detector.device}; classes: {', '.join(detector.class_names)}")
+        print(f"Thresholds: {detector.resolve_thresholds(options['thresholds'])}")
+        for video in videos:
+            print(f"\nVideo: {video}")
+            result = detector.detect(str(video), **options)
+            print(detector.report(result))
+            paths = write_outputs(result, detector, args.output, stem=video.stem,
+                                  plot=args.plot, best_clip=args.best_clip, checkpoint=checkpoint)
+            for name, path in paths.items():
+                print(f"{name}: {path}")
+    except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        parser.exit(2, f"error: {error}\n")
 
 
 if __name__ == "__main__":

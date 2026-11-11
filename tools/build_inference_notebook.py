@@ -19,14 +19,26 @@ def build_notebook():
         # @markdown Upload video ke panel Files, atau masukkan URL langsung ke berkas video untuk diunduh dengan **wget**.
         video_url = "/content/test.mp4" # @param {type:"string"}
         output_dir = "/content/outputs/check" # @param {type:"string"}
-        # @markdown Seluruh video diproses. Folder output yang sama akan mengganti hasil sebelumnya.
+        # @markdown Notebook menyertakan kode sendiri. Setelah git pull, buka ulang notebook terbaru di Colab.
+        # @markdown Folder output yang sama akan mengganti hasil sebelumnya.
         # @markdown **Model** — kosongkan checkpoint lokal untuk unduh otomatis dari Hub.
         model_repo = "azunzios/learning" # @param {type:"string"}
         model_file = "model.pt" # @param {type:"string"}
         local_checkpoint = "" # @param {type:"string"}
+        class_names_override = "" # @param {type:"string"}
+        # @markdown Jika metadata lama sudah netral, isi nama dipisahkan koma sesuai urutan head; contoh body_shaking,squirting.
         # @markdown **Inferensi** — mulai dengan batch 8; turunkan ke 4/2/1 jika VRAM penuh.
         batch_size = 8 # @param [1, 2, 4, 8, 16, 32] {type:"raw"}
         stride_sec = 0.5 # @param {type:"number"}
+        # @markdown Stride 1.0/2.0 mengurangi jumlah jendela; detail waktu dan recall dapat turun.
+        prefetch = True # @param {type:"boolean"}
+        scan_mode = "full" # @param ["full", "adaptive"]
+        gate_ratio = 0.5 # @param {type:"number"}
+        refine_padding_sec = 2.0 # @param {type:"number"}
+        # @markdown Adaptive memindai kasar lalu memperinci kandidat. Bukan klasifikasi percakapan; kejadian singkat bisa terlewat.
+        analyze_from_sec = 0.0 # @param {type:"number"}
+        analyze_until_sec = -1.0 # @param {type:"number"}
+        # @markdown Batas akhir -1 berarti sampai akhir video; timestamp hasil mengikuti video asli.
         use_fp16 = True # @param {type:"boolean"}
         require_gpu = True # @param {type:"boolean"}
         # @markdown Threshold **-1** memakai kalibrasi bawaan model.
@@ -58,6 +70,12 @@ def build_notebook():
             raise ValueError("Batch harus bilangan bulat minimal 1.")
         if not math.isfinite(stride_sec) or stride_sec <= 0:
             raise ValueError("Stride harus berupa angka positif.")
+        if (not math.isfinite(analyze_from_sec) or analyze_from_sec < 0
+                or not math.isfinite(analyze_until_sec)
+                or (analyze_until_sec != -1 and analyze_until_sec <= analyze_from_sec)):
+            raise ValueError("Rentang analisis tidak valid.")
+        if not 0 < gate_ratio <= 1 or not math.isfinite(refine_padding_sec) or refine_padding_sec < 0:
+            raise ValueError("Pengaturan adaptive tidak valid.")
         if not 0 <= low_ratio <= 1 or any(not math.isfinite(v) or v < 0
                                          for v in (smooth_sec, merge_gap_sec, min_duration_sec)):
             raise ValueError("Pengaturan post-processing tidak valid.")
@@ -108,14 +126,14 @@ def build_notebook():
                 except Exception:
                     token = None
             checkpoint = hf_hub_download(model_repo, model_file, token=token)
-        detector = Detector(checkpoint, device="cuda" if require_gpu else None, fp16=use_fp16)
+        names = [name.strip() for name in class_names_override.split(",")] if class_names_override.strip() else None
+        detector = Detector(checkpoint, device="cuda" if require_gpu else None, fp16=use_fp16,
+                            class_names=names)
         if stride_sec > detector.win / detector.fps:
             raise ValueError("Stride tidak boleh lebih panjang dari jendela model.")
-        if set(thresholds) - set(detector.class_names):
-            raise ValueError("Threshold mengacu pada kelas yang tidak tersedia di model.")
+        print("Workflow: original labels, no archive, prefetch + adaptive scan")
         print("Device:", detector.device, "| Kelas:", ", ".join(detector.class_names))
-        effective_thresholds = dict(detector.thresholds)
-        effective_thresholds.update(thresholds)
+        effective_thresholds = detector.resolve_thresholds(thresholds)
         print("Threshold efektif:", json.dumps(effective_thresholds))
         print("Threshold bawah:", json.dumps({name: value * low_ratio
                                               for name, value in effective_thresholds.items()}))
@@ -162,6 +180,9 @@ def build_notebook():
             "effective_thresholds": effective_thresholds,
             "threshold_overrides": thresholds,
             "settings": {"batch_size": int(batch_size), "stride_sec": stride_sec,
+                         "prefetch": prefetch, "scan": scan_mode, "gate_ratio": gate_ratio,
+                         "refine_padding": refine_padding_sec,
+                         "analyze_from_sec": analyze_from_sec, "analyze_until_sec": analyze_until_sec,
                          "fp16": detector.fp16, "device": detector.device,
                          "agg": "mean", "smooth_sec": smooth_sec, "merge_gap": merge_gap_sec,
                          "min_duration": min_duration_sec, "low_ratio": low_ratio},
@@ -177,6 +198,9 @@ def build_notebook():
             str(video_path), batch_size=int(batch_size), stride_sec=stride_sec,
             thresholds=thresholds, smooth_sec=smooth_sec, merge_gap=merge_gap_sec,
             min_dur=min_duration_sec, low_ratio=low_ratio,
+            prefetch=prefetch, scan=scan_mode, gate_ratio=gate_ratio,
+            refine_padding=refine_padding_sec, start_sec=analyze_from_sec,
+            end_sec=None if analyze_until_sec == -1 else analyze_until_sec,
         )
         print(detector.report(result))
         paths = {"video": video_path, "json": out / "result.json",
