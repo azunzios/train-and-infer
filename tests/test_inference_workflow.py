@@ -99,7 +99,8 @@ class NotebookTests(unittest.TestCase):
             self.assertNotIn(obsolete, all_code)
         self.assertIn('["wget", "-O",', all_code)
         self.assertIn('"effective_thresholds": effective_thresholds', all_code)
-        self.assertIn('arcname="run_config.json"', all_code)
+        self.assertNotIn("zipfile", all_code)
+        self.assertIn('files.download(str(paths["clip"]))', all_code)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")
@@ -168,12 +169,12 @@ class PipelineTests(unittest.TestCase):
             self.assertAlmostEqual(float(probe.stdout.strip()), 2, delta=0.3)
             result = json.loads(paths["json"].read_text(encoding="utf-8"))
             self.assertEqual(result["source_range"], {"start": 1, "end": 3})
-            self.assertEqual(set(result["thresholds"]), {"event_1", "event_2"})
-            self.assertEqual({s["label"] for s in result["segments"]}, {"event_1", "event_2"})
+            self.assertEqual(set(result["thresholds"]), {"previous_a", "previous_b"})
+            self.assertEqual({s["label"] for s in result["segments"]}, {"previous_a", "previous_b"})
             for segment in result["segments"]:
                 self.assertAlmostEqual(segment["source_start"], segment["start"] + 1)
                 self.assertAlmostEqual(segment["source_end"], segment["end"] + 1)
-            self.assertNotIn("previous_", json.dumps(result) + log.getvalue())
+            self.assertNotIn("previous_", log.getvalue())
             with zipfile.ZipFile(paths["archive"]) as bundle:
                 self.assertEqual(set(bundle.namelist()), {"clip.mp4", "result.json", "timeline.png"})
 

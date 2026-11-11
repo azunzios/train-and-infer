@@ -102,16 +102,25 @@ class Detector:
         segs = frame_scores_to_segments(frame_scores, self.fps, self.class_names, thr,
                                         low_ratio, smooth_sec, merge_gap, min_dur)
         return {"video": video_path, "segments": segs, "frame_scores": frame_scores,
-                "fps": self.fps, "thresholds": thr}
+                "fps": self.fps, "thresholds": thr,
+                "output_labels": getattr(self.model, "output_labels", {}),
+                "output_display": getattr(self.model, "output_display", {})}
 
     def report(self, result) -> str:
         return format_segments(result["segments"], self.display)
 
 
 def save_result(result, json_path: str, display: Optional[Dict[str, str]] = None):
-    out = {"video": result["video"], "thresholds": result["thresholds"],
-           "segments": [dict(s.to_dict(), display_name=(display or {}).get(s.label, s.label))
-                        for s in result["segments"]]}
+    labels = result.get("output_labels", {})
+    original_display = result.get("output_display", {})
+    segments = []
+    for segment in result["segments"]:
+        name = labels.get(segment.label, segment.label)
+        segments.append(dict(segment.to_dict(), label=name,
+                             display_name=original_display.get(name, (display or {}).get(name, name))))
+    out = {"video": result["video"],
+           "thresholds": {labels.get(name, name): value for name, value in result["thresholds"].items()},
+           "segments": segments}
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
 

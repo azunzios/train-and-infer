@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 from typing import Iterator, Tuple
+import math
+import os
+from pathlib import Path
+import tempfile
 
 import cv2
 import numpy as np
@@ -59,3 +63,46 @@ def read_frames(path: str, target_fps: float, size: int) -> np.ndarray:
     if not frames:
         raise IOError(f"No frames decoded from: {path}")
     return np.stack(frames)
+
+
+def export_segment(video_path: str, output_path: str, start: float, end: float) -> str:
+    """Save one detected interval using OpenCV (video only, without audio)."""
+    if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+        raise ValueError("Invalid clip interval.")
+    output = Path(output_path).resolve()
+    if output == Path(video_path).resolve():
+        raise ValueError("The clip output must differ from the source video.")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".clip-", dir=output.parent) as temporary:
+        destination = Path(temporary) / "clip.mp4"
+        cap = cv2.VideoCapture(video_path)
+        writer = None
+        written = 0
+        try:
+            if not cap.isOpened():
+                raise IOError("Cannot open the source video for clipping.")
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if not math.isfinite(fps) or fps <= 0:
+                raise ValueError("Cannot determine source video FPS.")
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            first, last = int(math.floor(start * fps)), int(math.ceil(end * fps))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, first)
+            writer = cv2.VideoWriter(str(destination), cv2.VideoWriter_fourcc(*"mp4v"),
+                                     fps, (width, height))
+            if not writer.isOpened():
+                raise IOError("Cannot create the output MP4.")
+            for _ in range(first, last):
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                writer.write(frame)
+                written += 1
+        finally:
+            cap.release()
+            if writer is not None:
+                writer.release()
+        if not written or not destination.is_file() or destination.stat().st_size == 0:
+            raise IOError("The selected interval produced no video frames.")
+        os.replace(destination, output)
+    return str(output)

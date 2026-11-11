@@ -1,9 +1,8 @@
 # Video Event Detection
 
-Training dan inferensi video menggunakan VideoMAEv2. Semua kelas menggunakan nama
-netral `event_1`, `event_2`, dan seterusnya. Urutan output dan threshold kalibrasi
-checkpoint tetap dipertahankan; label, tampilan, dan konfigurasi lama di metadata
-tidak disalin ke hasil inferensi.
+Training dan inferensi video menggunakan VideoMAEv2. Proses dan grafik menggunakan
+nama netral `event_1`, `event_2`, dan seterusnya. Hasil JSON memakai kembali nama
+asli checkpoint. Urutan output dan threshold kalibrasi tetap dipertahankan.
 
 ## Colab: langsung inferensi
 
@@ -13,7 +12,7 @@ tidak disalin ke hasil inferensi.
 2. Upload video ke panel Files, lalu isi `video_url` dengan path seperti
    `/content/test.mp4`. Alternatifnya, masukkan URL langsung ke berkas video.
 3. Atur `output_dir`, batch, dan threshold opsional pada formulir `@param`, lalu
-   jalankan **satu-satunya sel**. Setup, inferensi, grafik, dan unduh ZIP berjalan
+   jalankan **satu-satunya sel**. Setup, inferensi, grafik, dan unduh hasil berjalan
    dalam sel yang sama.
 
 Notebook menyertakan kode inferensi sehingga dapat diunggah langsung ke Colab
@@ -31,10 +30,16 @@ kompatibel dengan browser jika ingin menampilkan video di notebook.
 
 Untuk repo model privat, simpan token baca sebagai Colab Secret bernama `HF_TOKEN`
 dan izinkan akses notebook. Jangan memasukkan token ke sel kode yang akan dibagikan.
-ZIP berisi video asli, `result.json`, `timeline.png`, dan `run_config.json`.
+Notebook tidak membuat ZIP. `result.json` mengembalikan label dan threshold ke
+nama asli checkpoint; tampilan proses dan grafik tetap menggunakan nama netral.
+Hanya satu segmen dengan confidence `peak` tertinggi yang dipotong menjadi
+`best_clip.mp4`; jika peak sama, dipilih skor mean tertinggi. Klip dibuat melalui
+OpenCV dan tidak menyertakan audio. Jika tidak ada deteksi, klip tidak dibuat.
+Unduhan otomatis mencakup JSON dan satu klip tersebut. Grafik `timeline.png` dan
+`run_config.json` tetap tersimpan di folder output.
 Catatan konfigurasi memuat hash checkpoint, threshold efektif, pengaturan video,
 dan versi library untuk membandingkan dua run. Threshold formulir `-1` memakai
-kalibrasi model; nilai `0` meloloskan semua skor. Simpan ZIP sebelum runtime
+kalibrasi model; nilai `0` meloloskan semua skor. Simpan hasil sebelum runtime
 berakhir karena berkas `/content` bersifat sementara.
 
 ## Instalasi lokal untuk RTX 4070

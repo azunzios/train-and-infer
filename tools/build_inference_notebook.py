@@ -36,7 +36,7 @@ def build_notebook():
         merge_gap_sec = 2.0 # @param {type:"number"}
         min_duration_sec = 1.0 # @param {type:"number"}
         low_ratio = 0.6 # @param {type:"number"}
-        # @markdown Preview menyematkan seluruh video; aktifkan hanya untuk video pendek.
+        # @markdown Simpan satu segmen dengan confidence peak tertinggi. Klip hasil tidak menyertakan audio.
         preview_video = False # @param {type:"boolean"}
         download_results = True # @param {type:"boolean"}
 
@@ -51,7 +51,6 @@ def build_notebook():
         import sys
         import tempfile
         from urllib.parse import urlsplit
-        import zipfile
 
         if not video_url.strip():
             raise ValueError("Isi path video lokal atau URL langsung ke file video.")
@@ -153,7 +152,7 @@ def build_notebook():
             raise FileNotFoundError("Video belum ditemukan atau kosong. Upload file ke panel Files.")
 
         import cv2
-        from ved.video_io import video_info
+        from ved.video_io import video_info, export_segment
         source_fps, source_frames, source_duration = video_info(str(video_path))
         with open(checkpoint, "rb") as checkpoint_file:
             checkpoint_sha256 = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
@@ -182,30 +181,44 @@ def build_notebook():
         print(detector.report(result))
         paths = {"video": video_path, "json": out / "result.json",
                  "config": config_path,
-                 "timeline": out / "timeline.png", "archive": out / "inference_results.zip"}
+                 "timeline": out / "timeline.png"}
         save_result(result, str(paths["json"]), detector.display)
         figure = plot_timeline(result, detector.class_names, str(paths["timeline"]), detector.display)
         import matplotlib.pyplot as plt
         plt.close(figure)
-        with zipfile.ZipFile(paths["archive"], "w", compression=zipfile.ZIP_STORED) as archive:
-            archive.write(video_path, arcname="video" + video_path.suffix)
-            archive.write(paths["json"], arcname="result.json")
-            archive.write(paths["timeline"], arcname="timeline.png")
-            archive.write(paths["config"], arcname="run_config.json")
-        print(json.dumps(json.loads(paths["json"].read_text(encoding="utf-8")), indent=2))
+        data = json.loads(paths["json"].read_text(encoding="utf-8"))
+        if result["segments"]:
+            best_index = max(range(len(result["segments"])),
+                             key=lambda index: (result["segments"][index].peak,
+                                                result["segments"][index].mean))
+            best = result["segments"][best_index]
+            clip_path = out / "best_clip.mp4"
+            if clip_path.resolve() == video_path.resolve():
+                clip_path = out / "best_detection.mp4"
+            export_segment(str(video_path), str(clip_path), best.start, best.end)
+            paths["clip"] = clip_path
+            data["best_clip"] = dict(data["segments"][best_index], file=str(clip_path))
+            print("Klip terpilih:", clip_path, "| Confidence peak:", best.peak)
+        else:
+            data["best_clip"] = None
+            print("Tidak ada segmen yang lolos threshold; klip tidak dibuat.")
+        paths["json"].write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(json.dumps(data, indent=2))
         print("Hasil tersimpan:", out)
 
         from IPython.display import Image, Video, display
         display(Image(filename=str(paths["timeline"])))
-        if preview_video:
-            display(Video(str(video_path), embed=True))
+        if preview_video and "clip" in paths:
+            display(Video(str(paths["clip"]), embed=True))
         if download_results:
             try:
                 from google.colab import files
             except ImportError:
-                print("ZIP siap:", paths["archive"])
+                print("Hasil siap:", paths["json"], paths.get("clip", "Tidak ada klip"))
             else:
-                files.download(str(paths["archive"]))
+                files.download(str(paths["json"]))
+                if "clip" in paths:
+                    files.download(str(paths["clip"]))
     ''').strip().replace("__PACKAGE_SOURCES__", repr(package_sources))
     notebook = {
         "cells": [{"cell_type": "code", "metadata": {"cellView": "form"},
