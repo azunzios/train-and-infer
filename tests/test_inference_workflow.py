@@ -39,6 +39,28 @@ class MetadataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             neutral_metadata({"class_names": ["first"]}, 2)
 
+    def test_relabeling_preserves_detected_intervals_and_scores(self):
+        import numpy as np
+        from ved.postprocess import frame_scores_to_segments
+
+        metadata = {
+            "class_names": ["previous_b", "previous_a"],
+            "thresholds": {"previous_a": 0.66, "previous_b": 0.37},
+            "fps": 8, "num_frames": 16, "img_size": 224,
+        }
+        neutral = neutral_metadata(metadata, 2)
+        scores = np.full((80, 2), 0.1, dtype=np.float32)
+        scores[8:32, 0] = 0.85
+        scores[40:72, 1] = 0.95
+        before = frame_scores_to_segments(scores, 8, metadata["class_names"], metadata["thresholds"])
+        after = frame_scores_to_segments(scores, 8, neutral["class_names"], neutral["thresholds"])
+        self.assertTrue(before)
+        self.assertEqual(len(before), len(after))
+        for original, renamed in zip(before, after):
+            expected = original.to_dict()
+            expected["label"] = neutral["class_names"][metadata["class_names"].index(original.label)]
+            self.assertEqual(expected, renamed.to_dict())
+
 
 class TimeTests(unittest.TestCase):
     def test_supported_time_formats(self):
@@ -76,6 +98,8 @@ class NotebookTests(unittest.TestCase):
         for obsolete in ("yt_dlp", "ffmpeg", "deno", "from infer_url", "start_time =", "end_time ="):
             self.assertNotIn(obsolete, all_code)
         self.assertIn('["wget", "-O",', all_code)
+        self.assertIn('"effective_thresholds": effective_thresholds', all_code)
+        self.assertIn('arcname="run_config.json"', all_code)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")

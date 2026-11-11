@@ -31,7 +31,10 @@ kompatibel dengan browser jika ingin menampilkan video di notebook.
 
 Untuk repo model privat, simpan token baca sebagai Colab Secret bernama `HF_TOKEN`
 dan izinkan akses notebook. Jangan memasukkan token ke sel kode yang akan dibagikan.
-ZIP berisi video asli, `result.json`, dan `timeline.png`. Simpan ZIP sebelum runtime
+ZIP berisi video asli, `result.json`, `timeline.png`, dan `run_config.json`.
+Catatan konfigurasi memuat hash checkpoint, threshold efektif, pengaturan video,
+dan versi library untuk membandingkan dua run. Threshold formulir `-1` memakai
+kalibrasi model; nilai `0` meloloskan semua skor. Simpan ZIP sebelum runtime
 berakhir karena berkas `/content` bersifat sementara.
 
 ## Instalasi lokal untuk RTX 4070

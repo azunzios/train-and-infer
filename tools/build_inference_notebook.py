@@ -41,6 +41,7 @@ def build_notebook():
         download_results = True # @param {type:"boolean"}
 
         import importlib
+        import hashlib
         import json
         import math
         import os
@@ -114,6 +115,15 @@ def build_notebook():
         if set(thresholds) - set(detector.class_names):
             raise ValueError("Threshold mengacu pada kelas yang tidak tersedia di model.")
         print("Device:", detector.device, "| Kelas:", ", ".join(detector.class_names))
+        effective_thresholds = dict(detector.thresholds)
+        effective_thresholds.update(thresholds)
+        print("Threshold efektif:", json.dumps(effective_thresholds))
+        print("Threshold bawah:", json.dumps({name: value * low_ratio
+                                              for name, value in effective_thresholds.items()}))
+        print("Stride:", stride_sec, "| Smooth:", smooth_sec,
+              "| Merge gap:", merge_gap_sec, "| Durasi minimum:", min_duration_sec)
+        if any(value == 0 for value in effective_thresholds.values()):
+            print("PERHATIAN: threshold 0 meloloskan semua skor. Gunakan -1 pada formulir untuk kalibrasi model.")
         if detector.device.startswith("cuda"):
             print("GPU:", torch.cuda.get_device_name(0))
 
@@ -142,6 +152,28 @@ def build_notebook():
         if not video_path.is_file() or video_path.stat().st_size == 0:
             raise FileNotFoundError("Video belum ditemukan atau kosong. Upload file ke panel Files.")
 
+        import cv2
+        from ved.video_io import video_info
+        source_fps, source_frames, source_duration = video_info(str(video_path))
+        with open(checkpoint, "rb") as checkpoint_file:
+            checkpoint_sha256 = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
+        run_config = {
+            "checkpoint_sha256": checkpoint_sha256,
+            "model_settings": detector.meta,
+            "effective_thresholds": effective_thresholds,
+            "threshold_overrides": thresholds,
+            "settings": {"batch_size": int(batch_size), "stride_sec": stride_sec,
+                         "fp16": detector.fp16, "device": detector.device,
+                         "agg": "mean", "smooth_sec": smooth_sec, "merge_gap": merge_gap_sec,
+                         "min_duration": min_duration_sec, "low_ratio": low_ratio},
+            "video": {"path": str(video_path), "bytes": video_path.stat().st_size,
+                      "fps": source_fps, "frames": source_frames, "duration": source_duration},
+            "versions": {"torch": torch.__version__, "opencv": cv2.__version__},
+        }
+        config_path = out / "run_config.json"
+        config_path.write_text(json.dumps(run_config, indent=2), encoding="utf-8")
+        print("Checkpoint SHA256:", checkpoint_sha256)
+
         result = detector.detect(
             str(video_path), batch_size=int(batch_size), stride_sec=stride_sec,
             thresholds=thresholds, smooth_sec=smooth_sec, merge_gap=merge_gap_sec,
@@ -149,6 +181,7 @@ def build_notebook():
         )
         print(detector.report(result))
         paths = {"video": video_path, "json": out / "result.json",
+                 "config": config_path,
                  "timeline": out / "timeline.png", "archive": out / "inference_results.zip"}
         save_result(result, str(paths["json"]), detector.display)
         figure = plot_timeline(result, detector.class_names, str(paths["timeline"]), detector.display)
@@ -158,6 +191,7 @@ def build_notebook():
             archive.write(video_path, arcname="video" + video_path.suffix)
             archive.write(paths["json"], arcname="result.json")
             archive.write(paths["timeline"], arcname="timeline.png")
+            archive.write(paths["config"], arcname="run_config.json")
         print(json.dumps(json.loads(paths["json"].read_text(encoding="utf-8")), indent=2))
         print("Hasil tersimpan:", out)
 
